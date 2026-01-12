@@ -22,7 +22,7 @@ class $AssetsWavGen {
   const $AssetsWavGen();
 
   /// File path: assets/wav/hear_request.wav
-  String get hearRequest => 'assets/wav/hear_request.wav';
+  String get hearRequest => 'assets/wav/LJ037-0171.wav';
 
   /// List of all assets
   List<String> get values => [hearRequest];
