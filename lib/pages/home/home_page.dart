@@ -37,6 +37,8 @@ class _HomePageState extends ConsumerState<HomePage>
   String _originalText = ''; // 儲存完整的原始文字(包含標點)
   int _originalTextPos = 0; // 當前處理到 originalText 的位置
   String _urlText = '';
+  String chatInputText = "";
+  SpeechState? speechState;
 
   @override
   void initState() {
@@ -71,6 +73,9 @@ class _HomePageState extends ConsumerState<HomePage>
 
   @override
   Widget build(BuildContext context) {
+    chatInputText = ref.watch(chatInputProvider);
+    speechState = ref.watch(speechRecognitionProvider);
+
     // 監聽語音辨識結果，並同步到輸入框
     ref.listen(speechRecognitionProvider, (previous, next) {
       if (next.recognizedText.isNotEmpty &&
@@ -101,91 +106,103 @@ class _HomePageState extends ConsumerState<HomePage>
               UrlCtaButton(onTap: () => _launchURL()),
 
             // 語音識別控制按鈕
-            Consumer(
-              builder: (context, ref, widget) {
-                final chatInputText = ref.watch(chatInputProvider);
-                final speechState = ref.watch(speechRecognitionProvider);
-                final isLoading = ref.watch(isNeedLoadingProvider);
-
-                var _onChatActionTap = () async {
-                  // 如果有文字，直接走發送流程
-                  if (chatInputText.isNotEmpty) {
-                    final textToSend = chatInputText;
-
-                    // 清空輸入框與 url
-                    ref.read(chatInputProvider.notifier).clearText();
-                    _textController.clear();
-
-                    ref.read(urlTextProvider.notifier).setUrl('');
-
-                    // 隱藏鍵盤
-                    FocusScope.of(context).unfocus();
-
-                    await Future.delayed(Duration(milliseconds: 800));
-
-                    ref.read(digitalHumanTalkTextProvider.notifier).setText(STORY);
-
-                    final ByteData byteData = await rootBundle.load(Assets.wav.hearRequest);
-                    final Uint8List bytes = byteData.buffer.asUint8List();
-                    await ref.read(duixServiceProvider).playAudioBytes(bytes);
-
-                    ref.read(isNeedLoadingProvider.notifier).setLoading(true);
-
-                    try {
-                      var response = await ref
-                          .read(ttsRepositoryProvider)
-                          .getTtsWav(text: textToSend);
-
-                      ref.read(isNeedLoadingProvider.notifier).setLoading(false);
-
-                      _urlText = response.url;
-
-                      _currentTimeLines = response.timeLines;
-
-                      await ref
-                          .read(duixServiceProvider)
-                          .playAudioBytes(base64Decode(response.audioData));
-
-                      _handlePlayStart(response);
-                    } catch (e) {
-                      print(e.toString());
-
-                      ref.read(isNeedLoadingProvider.notifier).setLoading(false);
-
-                      _showSnackBar('發生異常，請確認伺服器連線或是 n8n 失效', Colors.red);
-                    }
-
-                    return;
-                  }
-
-                  // 如果沒文字，處理語音辨識啟動/停止
-                  if (speechState.isListening) {
-                    // 停止並等待最後結果
-                    await ref.read(speechRecognitionProvider.notifier).stopListening();
-
-                    final recognized = ref.read(speechRecognitionProvider).recognizedText;
-
-                    if (recognized.isEmpty) {
-                      _showSnackBar('未識別到任何內容', Colors.orange);
-                      return;
-                    }
-                  } else {
-                    ref.read(speechRecognitionProvider.notifier).startListening();
-                    // 隱藏鍵盤
-                    FocusScope.of(context).unfocus();
-                    return;
-                  }
-                };
-                return ChatInputBar(
-                  textController: _textController,
-                  onChatActionTap: _onChatActionTap,
-                );
-              },
+            ChatInputBar(
+              textController: _textController,
+              onChatActionTap: _onChatActionTap,
             ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _onChatActionTap() async {
+    // 如果有文字，直接走發送流程
+    if (chatInputText.isNotEmpty) {
+      await _handleSendTextFlow();
+      return;
+    }
+
+    // 如果沒文字，處理語音辨識啟動/停止
+    await _handleSpeechToggleFlow();
+  }
+
+  Future<void> _handleSendTextFlow() async {
+    // 清空輸入框與 url
+    _clearInputAndHideKeyboard();
+
+    await Future.delayed(Duration(milliseconds: 800));
+
+    ref.read(digitalHumanTalkTextProvider.notifier).setText(STORY);
+
+    await _playHearRequestAndShowStory();
+
+    ref.read(isNeedLoadingProvider.notifier).setLoading(true);
+
+    try {
+      var response = await ref
+          .read(ttsRepositoryProvider)
+          .getTtsWav(text: chatInputText);
+
+      await _playTtsAudio(response);
+
+      _handlePlayStart(response);
+    } catch (e) {
+      print(e.toString());
+
+      ref.read(isNeedLoadingProvider.notifier).setLoading(false);
+
+      _showSnackBar('發生異常，請確認伺服器連線或是 n8n 失效', Colors.red);
+    } finally {
+      // 確保一定關閉 loading（避免 try 裡 return 或 error 漏關）
+      ref.read(isNeedLoadingProvider.notifier).setLoading(false);
+    }
+  }
+
+  void _clearInputAndHideKeyboard() {
+    // 清空輸入框與 url
+    ref.read(chatInputProvider.notifier).clearText();
+    _textController.clear();
+
+    ref.read(urlTextProvider.notifier).setUrl('');
+
+    // 隱藏鍵盤
+    FocusScope.of(context).unfocus();
+  }
+
+  Future<void> _playHearRequestAndShowStory() async {
+    final ByteData byteData = await rootBundle.load(Assets.wav.hearRequest);
+    final Uint8List bytes = byteData.buffer.asUint8List();
+    await ref.read(duixServiceProvider).playAudioBytes(bytes);
+  }
+
+  Future<void> _playTtsAudio(TtsResponse response) async {
+    ref.read(isNeedLoadingProvider.notifier).setLoading(false);
+
+    _urlText = response.url;
+
+    _currentTimeLines = response.timeLines;
+
+    await ref
+        .read(duixServiceProvider)
+        .playAudioBytes(base64Decode(response.audioData));
+  }
+
+  Future<void> _handleSpeechToggleFlow() async {
+    if (speechState!.isListening) {
+      // 停止並等待最後結果
+      await ref.read(speechRecognitionProvider.notifier).stopListening();
+
+      final recognized = ref.read(speechRecognitionProvider).recognizedText;
+
+      if (recognized.isEmpty) {
+        _showSnackBar('未識別到任何內容', Colors.orange);
+      }
+    } else {
+      ref.read(speechRecognitionProvider.notifier).startListening();
+      // 隱藏鍵盤
+      FocusScope.of(context).unfocus();
+    }
   }
 
   void _launchURL() async {
