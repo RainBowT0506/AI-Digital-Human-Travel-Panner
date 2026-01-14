@@ -15,6 +15,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../Constants.dart';
+import 'ChatInputBar.dart';
+import 'DuixPlatformView.dart';
+import 'HomePageTitle.dart';
+import 'UrlCtaButton.dart';
 
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
@@ -86,36 +90,15 @@ class _HomePageState extends ConsumerState<HomePage>
           children: [
             Container(color: Color(0xFF7461a3)),
             // 數字人視圖
-            Padding(
-              padding: const EdgeInsets.fromLTRB(0, 70, 0, 90),
-              child: const AndroidView(
-                viewType: 'duix_platform_view',
-                layoutDirection: TextDirection.ltr,
-                creationParamsCodec: StandardMessageCodec(),
-              ),
-            ),
+            DuixPlatformView(),
 
-            Positioned(
-              top: 40,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Text(
-                  'Plan your next trip with AiTP',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    height: 1.0,
-                  ),
-                ),
-              ),
-            ),
+            HomePageTitle(),
 
             // 字幕顯示區域
             SubtitleOverlay(),
 
-            if (ref.watch(urlTextProvider).isNotEmpty) buildUrlCtaButton(),
+            if (ref.watch(urlTextProvider).isNotEmpty)
+              UrlCtaButton(onTap: () => _launchURL()),
 
             // 語音識別控制按鈕
             Consumer(
@@ -124,240 +107,82 @@ class _HomePageState extends ConsumerState<HomePage>
                 final speechState = ref.watch(speechRecognitionProvider);
                 final isLoading = ref.watch(isNeedLoadingProvider);
 
-                return buildChatInputBar(
-                  isLoading,
-                  ref,
-                  speechState,
-                  chatInputText,
-                  context,
+                var _onChatActionTap = () async {
+                  // 如果有文字，直接走發送流程
+                  if (chatInputText.isNotEmpty) {
+                    final textToSend = chatInputText;
+
+                    // 清空輸入框與 url
+                    ref.read(chatInputProvider.notifier).clearText();
+                    _textController.clear();
+
+                    ref.read(urlTextProvider.notifier).setUrl('');
+
+                    // 隱藏鍵盤
+                    FocusScope.of(context).unfocus();
+
+                    await Future.delayed(Duration(milliseconds: 800));
+
+                    ref.read(digitalHumanTalkTextProvider.notifier).setText(STORY);
+
+                    final ByteData byteData = await rootBundle.load(Assets.wav.hearRequest);
+                    final Uint8List bytes = byteData.buffer.asUint8List();
+                    await ref.read(duixServiceProvider).playAudioBytes(bytes);
+
+                    ref.read(isNeedLoadingProvider.notifier).setLoading(true);
+
+                    try {
+                      var response = await ref
+                          .read(ttsRepositoryProvider)
+                          .getTtsWav(text: textToSend);
+
+                      ref.read(isNeedLoadingProvider.notifier).setLoading(false);
+
+                      _urlText = response.url;
+
+                      _currentTimeLines = response.timeLines;
+
+                      await ref
+                          .read(duixServiceProvider)
+                          .playAudioBytes(base64Decode(response.audioData));
+
+                      _handlePlayStart(response);
+                    } catch (e) {
+                      print(e.toString());
+
+                      ref.read(isNeedLoadingProvider.notifier).setLoading(false);
+
+                      _showSnackBar('發生異常，請確認伺服器連線或是 n8n 失效', Colors.red);
+                    }
+
+                    return;
+                  }
+
+                  // 如果沒文字，處理語音辨識啟動/停止
+                  if (speechState.isListening) {
+                    // 停止並等待最後結果
+                    await ref.read(speechRecognitionProvider.notifier).stopListening();
+
+                    final recognized = ref.read(speechRecognitionProvider).recognizedText;
+
+                    if (recognized.isEmpty) {
+                      _showSnackBar('未識別到任何內容', Colors.orange);
+                      return;
+                    }
+                  } else {
+                    ref.read(speechRecognitionProvider.notifier).startListening();
+                    // 隱藏鍵盤
+                    FocusScope.of(context).unfocus();
+                    return;
+                  }
+                };
+                return ChatInputBar(
+                  textController: _textController,
+                  onChatActionTap: _onChatActionTap,
                 );
               },
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Positioned buildChatInputBar(
-    bool isLoading,
-    WidgetRef ref,
-    SpeechState speechState,
-    String chatInputText,
-    BuildContext context,
-  ) {
-    return Positioned(
-      bottom: 12,
-      left: 16,
-      right: 16,
-      child: isLoading
-          ? Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Assets.images.icon.loadingIcon.image(height: 65, width: 65),
-                SizedBox(width: 5),
-                WaveText(
-                  text: 'Just a few moments....',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 18,
-                  ),
-                ),
-              ],
-            )
-          : Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(30),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  // 文字輸入框
-                  Expanded(
-                    child: TextField(
-                      controller: _textController,
-                      onChanged: (value) =>
-                          ref.read(chatInputProvider.notifier).setText(value),
-                      decoration: InputDecoration(
-                        hintStyle: TextStyle(color: Colors.grey, fontSize: 14),
-                        hintText: speechState.isListening
-                            ? 'Listening...'
-                            : 'Ask me anything...',
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(
-                          vertical: 12,
-                        ),
-                      ),
-                      maxLines: 1,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // 分隔線
-                  Container(
-                    width: 1,
-                    height: 24,
-                    color: Colors.grey.withValues(alpha: 0.3),
-                  ),
-                  const SizedBox(width: 8),
-                  // 功能按鈕
-                  GestureDetector(
-                    onTap: () async {
-                      // 如果有文字，直接走發送流程
-                      if (chatInputText.isNotEmpty) {
-                        final textToSend = chatInputText;
-
-                        // 清空輸入框與 url
-                        ref.read(chatInputProvider.notifier).clearText();
-                        _textController.clear();
-
-                        ref.read(urlTextProvider.notifier).setUrl('');
-
-                        // 隱藏鍵盤
-                        FocusScope.of(context).unfocus();
-
-                        await Future.delayed(Duration(milliseconds: 800));
-
-                         ref
-                            .read(digitalHumanTalkTextProvider.notifier)
-                            .setText(STORY);
-
-                        final ByteData byteData = await rootBundle.load(
-                          Assets.wav.hearRequest,
-                        );
-                        final Uint8List bytes = byteData.buffer.asUint8List();
-                        await ref
-                            .read(duixServiceProvider)
-                            .playAudioBytes(bytes);
-
-                        ref
-                            .read(isNeedLoadingProvider.notifier)
-                            .setLoading(true);
-
-                        try {
-                          var response = await ref
-                              .read(ttsRepositoryProvider)
-                              .getTtsWav(text: textToSend);
-
-                          ref
-                              .read(isNeedLoadingProvider.notifier)
-                              .setLoading(false);
-
-                          _urlText = response.url;
-
-                          _currentTimeLines = response.timeLines;
-
-                          await ref
-                              .read(duixServiceProvider)
-                              .playAudioBytes(base64Decode(response.audioData));
-
-                          _handlePlayStart(response);
-                        } catch (e) {
-                          print(e.toString());
-
-                          ref
-                              .read(isNeedLoadingProvider.notifier)
-                              .setLoading(false);
-
-                          _showSnackBar('發生異常，請確認伺服器連線或是 n8n 失效', Colors.red);
-                        }
-
-                        return;
-                      }
-
-                      // 如果沒文字，處理語音辨識啟動/停止
-                      if (speechState.isListening) {
-                        // 停止並等待最後結果
-                        await ref
-                            .read(speechRecognitionProvider.notifier)
-                            .stopListening();
-
-                        final recognized = ref
-                            .read(speechRecognitionProvider)
-                            .recognizedText;
-
-                        if (recognized.isEmpty) {
-                          _showSnackBar('未識別到任何內容', Colors.orange);
-                          return;
-                        }
-                      } else {
-                        ref
-                            .read(speechRecognitionProvider.notifier)
-                            .startListening();
-                        // 隱藏鍵盤
-                        FocusScope.of(context).unfocus();
-                        return;
-                      }
-                    },
-                    child: Icon(
-                      chatInputText.isNotEmpty
-                          ? Icons.send_rounded
-                          : (speechState.isListening
-                                ? Icons.stop_rounded
-                                : Icons.mic_rounded),
-                      color: chatInputText.isNotEmpty
-                          ? Color(0xFF7461a3)
-                          : (speechState.isListening)
-                          ? Colors.red
-                          : Color(0xFF7461a3),
-                      size: 30,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-    );
-  }
-
-  Positioned buildUrlCtaButton() {
-    return Positioned(
-      bottom: 110,
-      left: 0,
-      right: 0,
-      child: Center(
-        child: GestureDetector(
-          onTap: () => _launchURL(),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF7461a3),
-              borderRadius: BorderRadius.circular(30),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.3),
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.link_rounded, color: Colors.white, size: 28),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    'Your schedule is ready!!',
-                    textAlign: TextAlign.center,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ),
       ),
     );
