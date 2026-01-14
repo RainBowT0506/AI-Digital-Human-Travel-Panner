@@ -128,6 +128,8 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 
   Future<void> _handleSendTextFlow() async {
+    final textToSend = chatInputText;
+
     // 清空輸入框與 url
     _clearInputAndHideKeyboard();
 
@@ -142,7 +144,7 @@ class _HomePageState extends ConsumerState<HomePage>
     try {
       var response = await ref
           .read(ttsRepositoryProvider)
-          .getTtsWav(text: chatInputText);
+          .getTtsWav(text: textToSend);
 
       await _playTtsAudio(response);
 
